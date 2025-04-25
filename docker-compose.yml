@@ -1,0 +1,85 @@
+version: '3.8'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.0.1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    networks:
+      - services
+
+  kafka:
+    image: confluentinc/cp-kafka:7.0.1
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    networks:
+      - services
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.13
+    environment:
+      discovery.type: single-node
+    ports:
+      - "9200:9200"
+    networks:
+      - services
+
+  elasticsearch-setup:
+    image: appropriate/curl
+    command: >
+      sh -c 'sleep 60 && curl -XPUT "http://elasticsearch:9200/test-pipeline" -H "Content-Type: application/json" -d "{\"mappings\":{\"properties\":{\"id\":{\"type\":\"keyword\"},\"full_name\":{\"type\":\"text\"},\"timestamp\":{\"type\":\"date\",\"format\":\"yyyy/MM/dd HH:mm:ss\"},\"active\":{\"type\":\"boolean\"}}}}"'
+    depends_on:
+      - elasticsearch
+    networks:
+      - services
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.17.13
+    volumes:
+      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+    depends_on:
+      - kafka
+      - elasticsearch
+    networks:
+      - services
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.13
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - services
+
+  kafka_init:
+    image: confluentinc/cp-kafka:7.0.1
+    depends_on:
+      - kafka
+    command: >
+      /bin/bash -c "
+        echo 'Waiting for Kafka to be ready...';
+        cub kafka-ready -b kafka:9092 1 80;
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic test_pipeline --partitions 1 --replication-factor 1 --config cleanup.policy=delete;
+        echo 'Topics created successfully.';
+      "
+
+  producer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - kafka
+    networks:
+      - services
+
+networks: 
+  services:
+    name: service_network
+    driver: bridge
